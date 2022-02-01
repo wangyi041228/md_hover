@@ -4,7 +4,7 @@ import time
 import webbrowser
 from ctypes import windll
 # from datetime import datetime
-from json import loads
+from json import loads, dumps
 from tkinter import *
 from tkinter.ttk import *
 
@@ -27,6 +27,13 @@ BOXES = (
     ((136, 398, 316, 576), (102, 424, 312, 632), (312, 480, 874, 1036)),  # 3200x1800
     ((164, 478, 378, 692), (122, 508, 372, 758), (374, 576, 1048, 1244)),  # 3840x2160
 )
+
+
+def text_event(event):
+    if event.state == 12 and event.keysym == 'c':
+        return
+    else:
+        return "break"
 
 
 def screenshot():
@@ -72,18 +79,37 @@ class MainWindow(Tk):
         super().__init__()
         self.title('MD_HOVER')
         self.loop = None
-        self.geometry(f'440x320+5+466')
+        self.cfg = {
+            'w': 440,
+            'h': 320,
+            'x': 5,
+            'y': 466,
+            'f': 12,
+            'm': 0,
+            'r': 0,
+            'j': 1,
+            'e': 1,
+            'a': 1,
+        }
+        try:
+            with open('md_hover.cfg', 'r') as f:
+                ini = loads(f.read())
+                self.cfg.update(ini)
+        except Exception:
+            pass
+        self.geometry(f"{self.cfg['w']}x{self.cfg['h']}+{self.cfg['x']}+{self.cfg['y']}")
         self.wm_attributes('-topmost', True)
+        self.protocol('WM_DELETE_WINDOW', self.save_exit)
+        # self.wm_attributes("-transparentcolor", "white")
         self.override = False
         self.toolwindow = False
-        self.scan_mode = True
-        self.low_rate = True
         self.ygoid = 89631139
         self.scan_cid = 0
         self.last_hash = [0] * 3
         self.pm = None
         self.base_addr = 0
         self.deck_cid = -1
+        self.repl_cid = -1
         self.duel_cid = -1
         self.cards_info = {}
         with open('cards.json', 'r', encoding='utf-8') as f:
@@ -94,60 +120,157 @@ class MainWindow(Tk):
                 cn_name = card_info['cn_name'] if 'cn_name' in card_info else ''
                 jp_name = card_info['jp_name'] if 'jp_name' in card_info else ''
                 en_name = card_info['en_name'] if 'en_name' in card_info else ''
-                pdesc = card_info['text']['pdesc']
-                desc = card_info['text']['desc'].replace('\r\n', '\n')
+                text = card_info['text']
+                pdesc = text['pdesc']
+                tdesc = text['types']  # replace('\n', ' ')
+                desc = text['desc'].replace('\r\n', '\n')
                 fdesc = '\n　　○○○○　　\n'.join((pdesc, desc)) if pdesc else desc
-                self.cards_info[cid_int] = (card_info['id'], cn_name, jp_name, en_name, fdesc)
+                self.cards_info[cid_int] = (card_info['id'], cn_name, jp_name, en_name, fdesc, tdesc)
         with open('tokens.json', 'r', encoding='utf-8') as f:
             data = loads(f.read())
             for cid, info in iter(data.items()):
-                self.cards_info[int(cid)] = (89631139, info[0], info[1], info[2], info[3])
+                self.cards_info[int(cid)] = (89631139, info[0], info[1], info[2], info[3], '')
         with open('hash.json', 'r', encoding='utf-8') as f:
             self.art_hash = loads(f.read())
-        self.fontsize = 12
-        self.Label1 = Label(self, width=3)
-        self.Label1.pack(side='left', expand=0, fill='y')
-        self.Label2 = Label(self, font=('微软雅黑', self.fontsize + 1, 'bold'), text='青眼白龙', padding=-3)
-        self.Label2.pack(side='top', fill='x')
-        self.Label2.bind('<Button-1>', copy_widget_text)
-        self.Label4 = Label(self, font=('微软雅黑', self.fontsize + 1, 'bold'), text='青眼の白龍', padding=-3)
-        self.Label4.pack(side='top', fill='x')
-        self.Label4.bind('<Button-1>', copy_widget_text)
-        self.Label5 = Label(self, font=('微软雅黑', self.fontsize + 1, 'bold'), text='Blue-Eyes White Dragon', padding=-3)
-        self.Label5.pack(side='top', fill='x')
-        self.Label5.bind('<Button-1>', copy_widget_text)
-        self.Label3 = Label(self, font=('微软雅黑', self.fontsize), wraplength=400, anchor='nw',
-                            text='以高攻击力著称的传说之龙。任何对手都能粉碎，其破坏力不可估量。')
-        self.Label3.pack(side='right', expand=1, fill=BOTH)
-        self.Button1 = Button(self.Label3, text='内存模式', width=30, command=self.main_start)
+
+        self.fontsize = self.cfg['f']
+
+        self.tf = Label(self)
+        self.tf.pack(side='top', fill='x', pady=5)
+
+        self.cname_label = Label(self.tf, font=('微软雅黑', self.fontsize + 1, 'bold'), text='青眼白龙', padding=-3)
+        self.cname_label.pack(side='top', fill='x', padx=(5, 0))
+        self.cname_label.bind('<Button-1>', copy_widget_text)
+        self.jname_label = Label(self.tf, font=('微软雅黑', self.fontsize + 1, 'bold'), text='青眼の白龍', padding=-3)
+        self.jname_label.pack(side='top', fill='x', padx=(5, 0))
+        self.jname_label.bind('<Button-1>', copy_widget_text)
+        self.ename_label = Label(self.tf, font=('微软雅黑', self.fontsize + 1, 'bold'),
+                                 text='Blue-Eyes White Dragon', padding=-3)
+        self.ename_label.pack(side='top', fill='x', padx=(5, 0))
+        self.ename_label.bind('<Button-1>', copy_widget_text)
+        self.attr_label = Label(self.tf, font=('微软雅黑', self.fontsize),
+                                text='[怪兽|通常] 龙/光\n[★8] 3000/2500', padding=-3)
+        self.attr_label.pack(side='top', fill='x', padx=(5, 0))
+
+        self.desc_label = Text(self, font=('微软雅黑', self.fontsize))
+        # self.desc_label.configure(state='disabled')
+        self.desc_label.insert(END, '以高攻击力著称的传说之龙。任何对手都能粉碎，其破坏力不可估量。')
+        self.desc_scroll = Scrollbar(self, orient='vertical', command=self.desc_label.yview)
+        self.desc_label.configure(yscrollcommand=self.desc_scroll.set)
+        self.desc_scroll.pack(side='right', fill=Y)
+        self.desc_label.pack(side='left', expand=1, fill=BOTH)
+        self.desc_label.bind("<Key>", lambda xx: text_event(xx))
+
+        self.mode_t0 = ['识图', '内存']
+        self.mode_t = f'以{self.mode_t0[self.cfg["m"]]}模式\n运行插件\n\n右击菜单\n调整模式'
+        self.Button1 = Button(self.desc_label, text=self.mode_t, width=30, command=self.main_start)
         self.Button1.pack()
         self.Button1.place(x=50, y=50)
-        self.Button1b = Button(self.Label3, text='识图模式', width=30, command=self.main_start_b)
-        self.Button1b.pack()
-        self.Button1b.place(x=50, y=100)
 
-        self.Button2 = Button(self.Label1, text='+', width=3, command=self.font_size_up)
-        self.Button2.pack()
-        self.Button2.place(x=-3, y=55)
-        self.Button3 = Button(self.Label1, text='-', width=3, command=self.font_size_down)
-        self.Button3.pack()
-        self.Button3.place(x=-3, y=80)
-        self.Button4 = Button(self.Label1, text='网', width=3, command=self.web)
-        self.Button4.pack()
-        self.Button4.place(x=-3, y=160)
-        self.Button5 = Button(self.Label1, text='图', width=3, command=self.switch)
-        self.Button5.pack()
-        self.Button5.place(x=-3, y=210)
-        self.Button6 = Button(self.Label1, text='4', width=3, command=self.rate)
-        self.Button6.pack()
-        self.Button6.place(x=-3, y=110)
-        self.Button7 = Button(self.Label1, text='顶', width=3, command=self.over)
-        self.Button7.pack()
-        self.Button7.place(x=-3, y=0)
-        self.Button8 = Button(self.Label1, text='标', width=3, command=self.icon)
-        self.Button8.pack()
-        self.Button8.place(x=-3, y=25)
+        self.Menu = Menu(self, tearoff=False)
+
+        self.mode_menu = Menu(self.Menu, tearoff=0)
+        self.mode_var = IntVar(value=self.cfg['m'])
+        for i, lb in enumerate(['识图', '内存']):
+            self.mode_menu.add_radiobutton(label=lb, command=self.set_mode, variable=self.mode_var, value=i)
+        self.Menu.add_cascade(label='模式', menu=self.mode_menu)
+        self.rate_menu = Menu(self.Menu, tearoff=0)
+        self.rate_var = IntVar(value=self.cfg['r'])
+        for i, lb in enumerate(['4帧节能', '16帧够用']):
+            self.rate_menu.add_radiobutton(label=lb, variable=self.rate_var, value=i)
+        self.Menu.add_cascade(label='刷新频率', menu=self.rate_menu)
+
+        self.Menu.add_separator()
+
+        self.Menu.add_command(label='锁定窗口/解锁', command=self.over)
+        self.Menu.add_command(label='简化窗口/恢复', command=self.icon)
+
+        self.Menu.add_separator()
+
+        self.fontsize_menu = Menu(self.Menu, tearoff=0)
+        self.fontsize_menu.add_command(label='-', command=self.font_size_down)
+        self.fontsize_menu.add_command(label='+', command=self.font_size_up)
+        self.Menu.add_cascade(label='调整字号', menu=self.fontsize_menu)
+
+        self.Menu.add_separator()
+
+        self.jname_menu = Menu(self.Menu, tearoff=0)
+        self.jname_var = IntVar(value=self.cfg['j'])
+        for i, lb in enumerate(['隐藏', '显示']):
+            self.jname_menu.add_radiobutton(label=lb, command=self.set_jname, variable=self.jname_var, value=i)
+        self.Menu.add_cascade(label='日语牌名', menu=self.jname_menu)
+
+        self.ename_menu = Menu(self.Menu, tearoff=0)
+        self.ename_var = IntVar(value=self.cfg['e'])
+        for i, lb in enumerate(['隐藏', '显示']):
+            self.ename_menu.add_radiobutton(label=lb, command=self.set_ename, variable=self.ename_var, value=i)
+        self.Menu.add_cascade(label='英语牌名', menu=self.ename_menu)
+
+        self.attr_menu = Menu(self.Menu, tearoff=0)
+        self.attr_var = IntVar(value=self.cfg['a'])
+        for i, lb in enumerate(['隐藏', '显示']):
+            self.attr_menu.add_radiobutton(label=lb, command=self.set_attr, variable=self.attr_var, value=i)
+        self.Menu.add_cascade(label='类别属性', menu=self.attr_menu)
+
+        self.Menu.add_separator()
+
+        self.Menu.add_command(label='OUROCG', command=self.ourocg)
+        self.Menu.add_command(label='百鸽查卡', command=self.ygocdb)
+
+        self.bind("<Button-3>", self.popupmenu)
+        self.set_jname()
+        self.set_ename()
+        self.set_attr()
         self.mainloop()
+
+    def popupmenu(self, event):
+        try:
+            self.Menu.post(event.x_root, event.y_root)
+        finally:
+            self.Menu.grab_release()
+
+    def save_exit(self):
+        self.cfg = {
+            'w': self.winfo_width(),
+            'h': self.winfo_height(),
+            'x': self.winfo_x(),
+            'y': self.winfo_y(),
+            'f': self.fontsize,
+            'm': self.mode_var.get(),
+            'r': self.rate_var.get(),
+            'j': self.jname_var.get(),
+            'e': self.ename_var.get(),
+            'a': self.attr_var.get(),
+        }
+        try:
+            with open('md_hover.cfg', 'w') as f:
+                print(dumps(self.cfg), file=f)
+        finally:
+            self.destroy()
+
+    def set_dark(self):
+        if self.dark_var.get():
+            self.dark_label.pack(side='top', fill='x', padx=(5, 0))
+        else:
+            self.dark_label.pack_forget()
+
+    def set_jname(self):
+        if self.jname_var.get():
+            self.jname_label.pack(side='top', fill='x', padx=(5, 0))
+        else:
+            self.jname_label.pack_forget()
+
+    def set_ename(self):
+        if self.ename_var.get():
+            self.ename_label.pack(side='top', fill='x', padx=(5, 0))
+        else:
+            self.ename_label.pack_forget()
+
+    def set_attr(self):
+        if self.attr_var.get():
+            self.attr_label.pack(side='top', fill='x', padx=(5, 0))
+        else:
+            self.attr_label.pack_forget()
 
     def get_loop(self, loop):
         self.loop = loop
@@ -155,9 +278,7 @@ class MainWindow(Tk):
         self.loop.run_forever()
 
     def main_start(self):
-        self.scan_mode = False
         self.Button1.destroy()
-        self.Button1b.destroy()
         coroutine1 = self.handler()
         new_loop = asyncio.new_event_loop()
         t = threading.Thread(target=self.get_loop, args=(new_loop,))
@@ -165,49 +286,40 @@ class MainWindow(Tk):
         t.start()
         asyncio.run_coroutine_threadsafe(coroutine1, new_loop)
 
-    def main_start_b(self):
-        self.Button1.destroy()
-        self.Button1b.destroy()
-        coroutine1 = self.handler()
-        new_loop = asyncio.new_event_loop()
-        t = threading.Thread(target=self.get_loop, args=(new_loop,))
-        t.daemon = True
-        t.start()
-        asyncio.run_coroutine_threadsafe(coroutine1, new_loop)
+    def set_mode(self):
+        mode = self.mode_var.get()
+        mode_t = self.mode_t0[mode]
+        try:
+            self.Button1['text'] = f'以{mode_t}模式\n运行插件\n\n右击菜单\n调整模式'
+        except Exception:
+            pass
 
     def font_size_up(self):
         self.fontsize += 1
-        self.Label2['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
-        self.Label3['font'] = ('微软雅黑', self.fontsize)
-        self.Label3['wraplength'] = self.winfo_width() - 40
-        self.Label4['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
-        self.Label5['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
+        f0 = ('微软雅黑', self.fontsize, 'bold')
+        f1 = ('微软雅黑', self.fontsize + 1, 'bold')
+        self.cname_label['font'] = f1
+        self.jname_label['font'] = f1
+        self.ename_label['font'] = f1
+        self.attr_label['font'] = f0
+        self.desc_label['font'] = f0
 
     def font_size_down(self):
         if self.fontsize > 6:
             self.fontsize -= 1
-            self.Label2['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
-            self.Label3['font'] = ('微软雅黑', self.fontsize)
-            self.Label3['wraplength'] = self.winfo_width() - 40
-            self.Label4['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
-            self.Label5['font'] = ('微软雅黑', self.fontsize + 1, 'bold')
+            f0 = ('微软雅黑', self.fontsize, 'bold')
+            f1 = ('微软雅黑', self.fontsize + 1, 'bold')
+            self.cname_label['font'] = f1
+            self.jname_label['font'] = f1
+            self.ename_label['font'] = f1
+            self.attr_label['font'] = f0
+            self.desc_label['font'] = f0
 
-    def web(self):
+    def ygocdb(self):
         webbrowser.open_new('https://ygocdb.com/card/' + str(self.ygoid))
 
-    def switch(self):
-        self.scan_mode = not self.scan_mode
-        if self.scan_mode:
-            self.Button5['text'] = '图'
-        else:
-            self.Button5['text'] = '内'
-
-    def rate(self):
-        self.low_rate = not self.low_rate
-        if self.low_rate:
-            self.Button6['text'] = '4'
-        else:
-            self.Button6['text'] = '16'
+    def ourocg(self):
+        webbrowser.open_new('https://www.ourocg.cn/search/' + str(self.ygoid))
 
     def over(self):
         self.override = not self.override
@@ -261,12 +373,13 @@ class MainWindow(Tk):
     def get_memory(self):
         base_addr = self.base_addr
         pm = self.pm
-        deck_cid, duel_cid = -1, -1
+        deck_cid, repl_cid, duel_cid = -1, -1, -1
         try:
             value = pm.read_longlong(base_addr + 0x01CCD278)
-            for offset in [0xB8, 0x0, 0xF8, 0x1D8]:
+            for offset in [0xB8, 0x0, 0xF8]:
                 value = pm.read_longlong(value + offset)
-            deck_cid = pm.read_int(value + 0x20)
+            deck_cid = pm.read_int(pm.read_longlong(value + 0x1D8) + 0x20)
+            repl_cid = pm.read_int(pm.read_longlong(value + 0x140) + 0x20)
         except Exception:
             pass
         try:
@@ -276,13 +389,13 @@ class MainWindow(Tk):
             duel_cid = pm.read_int(value + 0x44)
         except Exception:
             pass
-        return deck_cid, duel_cid
+        return deck_cid, repl_cid, duel_cid
 
     async def handler(self):
         while True:
             _t0 = time.time()
-            _scan_mode = self.scan_mode
-            _low_rate = self.low_rate
+            _scan_mode = not self.mode_var.get()
+            rate_sleep = 0.0625 if self.rate_var.get() else 0.25
             final_cid = 0
 
             if _scan_mode:
@@ -296,11 +409,14 @@ class MainWindow(Tk):
                 if self.pm:
                     try:
                         self.pm.read_longlong(self.base_addr)
-                        deck_cid, duelcid = self.get_memory()
-                        if duelcid != self.duel_cid and 0 < duelcid < 18000:
+                        deck_cid, repl_cid, duelcid = self.get_memory()
+                        if duelcid != self.duel_cid and 3899 < duelcid < 18000:
                             final_cid = duelcid
                             self.duel_cid = duelcid
-                        elif deck_cid != self.deck_cid and 0 < deck_cid < 18000:
+                        elif repl_cid != self.repl_cid and 3899 < deck_cid < 18000:
+                            final_cid = repl_cid
+                            self.repl_cid = repl_cid
+                        elif deck_cid != self.deck_cid and 3899 < deck_cid < 18000:
                             final_cid = deck_cid
                             self.deck_cid = deck_cid
                     except Exception:
@@ -309,15 +425,16 @@ class MainWindow(Tk):
                 hover_info = self.cards_info[final_cid]
                 # print(final_cid, hover_info)
                 self.ygoid = hover_info[0]
-                self.Label2['text'] = hover_info[1]
-                self.Label4['text'] = hover_info[2]
-                self.Label5['text'] = hover_info[3]
-                self.Label3['text'] = hover_info[4]
-                self.Label3['wraplength'] = self.winfo_width() - 40
-            dt = _t0 - time.time() + (0.25 if _low_rate else 0.0625)
+                self.cname_label['text'] = hover_info[1]
+                self.jname_label['text'] = hover_info[2]
+                self.ename_label['text'] = hover_info[3]
+                self.desc_label.delete('1.0', END)
+                self.desc_label.insert(END, hover_info[4])
+                self.attr_label['text'] = hover_info[5]
+            dt = _t0 - time.time() + rate_sleep
             if dt > 0:
                 await asyncio.sleep(dt)
 
 
 if __name__ == '__main__':
-    main = MainWindow()
+    MainWindow()

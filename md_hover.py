@@ -3,7 +3,6 @@ import threading
 import time
 import webbrowser
 from ctypes import windll
-# from datetime import datetime
 from json import loads, dumps
 from tkinter import *
 from tkinter.ttk import *
@@ -15,6 +14,28 @@ import win32gui
 import win32ui
 from PIL import Image
 
+n_flags = 3
+try:
+    _win_v = sys.getwindowsversion()
+    if _win_v.major == 6 and _win_v.minor == 1:
+        n_flags = 1
+except Exception:
+    pass
+'''
+WIN_10 = (10, 0, 0)
+WIN_8 = (6, 2, 0)
+WIN_7 = (6, 1, 0)
+WIN_SERVER_2008 = (6, 0, 1)
+WIN_VISTA_SP1 = (6, 0, 1)
+WIN_VISTA = (6, 0, 0)
+WIN_SERVER_2003_SP2 = (5, 2, 2)
+WIN_SERVER_2003_SP1 = (5, 2, 1)
+WIN_SERVER_2003 = (5, 2, 0)
+WIN_XP_SP3 = (5, 1, 3)
+WIN_XP_SP2 = (5, 1, 2)
+WIN_XP_SP1 = (5, 1, 1)
+WIN_XP = (5, 1, 0)
+'''
 windll.user32.SetProcessDPIAware()
 BOXES = (
     ((55, 159, 126, 231), (41, 169, 124, 253), (125, 192, 349, 414)),  # 1280x720
@@ -27,6 +48,12 @@ BOXES = (
     ((136, 398, 316, 576), (102, 424, 312, 632), (312, 480, 874, 1036)),  # 3200x1800
     ((164, 478, 378, 692), (122, 508, 372, 758), (374, 576, 1048, 1244)),  # 3840x2160
 )
+F2A = {
+    37: {6: 0x348, 211: 0x360, 159: 0x360, 45: 0x378},  # 34/35/36 x 24 = 816/840/864
+    17: {6: 0xC0, 211: 0xD8, 159: 0xD8, 45: 0xF0},  # 11/12/13 = 264/288/312
+    89: {6: 0xF0, 211: 0x108, 159: 0x108, 45: 0x120},  # 9/10/11 = 216/240/264
+    # 53/52/54 = 1272/1248/1296
+}
 
 
 def text_event(event):
@@ -37,28 +64,29 @@ def text_event(event):
 
 
 def screenshot():
+    global n_flags
     hwnd = win32gui.FindWindow(None, 'masterduel')
     if hwnd:
         box = win32gui.GetWindowRect(hwnd)
         box_w = box[2] - box[0]
         box_h = box[3] - box[1]
-        hwndDC = win32gui.GetWindowDC(hwnd)
-        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
-        saveDC = mfcDC.CreateCompatibleDC()
-        saveBitMap = win32ui.CreateBitmap()
-        saveBitMap.CreateCompatibleBitmap(mfcDC, box_w, box_h)  # 10%
-        saveDC.SelectObject(saveBitMap)
-        result = windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 3)  # 58%
-        bmpinfo = saveBitMap.GetInfo()
-        bmpstr = saveBitMap.GetBitmapBits(True)  # 19%
+        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+        save_dc = mfc_dc.CreateCompatibleDC()
+        save_bitmap = win32ui.CreateBitmap()
+        save_bitmap.CreateCompatibleBitmap(mfc_dc, box_w, box_h)  # 10%
+        save_dc.SelectObject(save_bitmap)
+        result = windll.user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), n_flags)  # 58%
+        bmpinfo = save_bitmap.GetInfo()
+        bmpstr = save_bitmap.GetBitmapBits(True)  # 19%
         im = Image.frombuffer('RGB', (bmpinfo['bmWidth'], bmpinfo['bmHeight']), bmpstr, 'raw', 'BGRX', 0, 1)  # 12%
-        win32gui.DeleteObject(saveBitMap.GetHandle())
-        saveDC.DeleteDC()
-        mfcDC.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwndDC)
-        if result == 1:
-            return True, im
-    return False, None
+        win32gui.DeleteObject(save_bitmap.GetHandle())
+        save_dc.DeleteDC()
+        mfc_dc.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwnd_dc)
+        if result != 0:
+            return im
+    return None
 
 
 def get_pm():
@@ -67,7 +95,7 @@ def get_pm():
         addr = pymem.process.module_from_name(pm.process_handle, 'GameAssembly.dll').lpBaseOfDll
         return pm, addr
     except Exception:
-        return None, 0
+        return None, None
 
 
 def copy_widget_text(event):
@@ -90,6 +118,9 @@ class MainWindow(Tk):
             'j': 1,
             'e': 1,
             'a': 1,
+            'p': 0,
+            't': 0,
+            's': 1,
         }
         try:
             with open('md_hover.cfg', 'r') as f:
@@ -107,10 +138,20 @@ class MainWindow(Tk):
         self.scan_cid = 0
         self.last_hash = [0] * 3
         self.pm = None
-        self.base_addr = 0
+        self.base_addr = None
+        self.deck_addr = None
+        self.revi_addr = None
+        self.duel_addr = None
+        self.play_addr = None
+        self.shop_flag_addr = None
+        self.shop_count = None
+        self.shop_cids = None
+        self.offsets = [816, 840, 864]
         self.deck_cid = -1
-        self.repl_cid = -1
+        self.revi_cid = -1
         self.duel_cid = -1
+        self.play_cid = -1
+        self.shop_cid = -1
         self.cards_info = {}
         with open('cards.json', 'r', encoding='utf-8') as f:
             data = loads(f.read())
@@ -134,7 +175,6 @@ class MainWindow(Tk):
             self.art_hash = loads(f.read())
 
         self.fontsize = self.cfg['f']
-
         self.tf = Label(self)
         self.tf.pack(side='top', fill='x', pady=5)
 
@@ -153,16 +193,20 @@ class MainWindow(Tk):
         self.attr_label.pack(side='top', fill='x', padx=(5, 0))
 
         self.desc_label = Text(self, font=('微软雅黑', self.fontsize))
-        # self.desc_label.configure(state='disabled')
         self.desc_label.insert(END, '以高攻击力著称的传说之龙。任何对手都能粉碎，其破坏力不可估量。')
         self.desc_scroll = Scrollbar(self, orient='vertical', command=self.desc_label.yview)
         self.desc_label.configure(yscrollcommand=self.desc_scroll.set)
         self.desc_scroll.pack(side='right', fill=Y)
         self.desc_label.pack(side='left', expand=1, fill=BOTH)
         self.desc_label.bind("<Key>", lambda xx: text_event(xx))
+        self.widgets = [self.tf, self.cname_label, self.jname_label, self.ename_label, self.attr_label,
+                        self.desc_label, self]
+        self.widgets_bg = [widget['background'] for widget in self.widgets]
+        self.widgets_fg = [widget['foreground'] for widget in self.widgets[:-1]]
 
         self.mode_t0 = ['识图', '内存']
-        self.mode_t = f'以{self.mode_t0[self.cfg["m"]]}模式\n运行插件\n\n右击菜单\n调整模式'
+        self.mode_t = f'右击窗口调整参数，\n拉伸窗口调整大小，\n单击按钮开始运行。\n（锁定窗口可隐藏标题栏）\n\n' \
+                      f'将采用【{self.mode_t0[self.cfg["m"]]}模式】'
         self.Button1 = Button(self.desc_label, text=self.mode_t, width=30, command=self.main_start)
         self.Button1.pack()
         self.Button1.place(x=50, y=50)
@@ -174,6 +218,13 @@ class MainWindow(Tk):
         for i, lb in enumerate(['识图', '内存']):
             self.mode_menu.add_radiobutton(label=lb, command=self.set_mode, variable=self.mode_var, value=i)
         self.Menu.add_cascade(label='模式', menu=self.mode_menu)
+
+        self.play_menu = Menu(self.Menu, tearoff=0)
+        self.play_var = IntVar(value=self.cfg['p'])
+        for i, lb in enumerate(['忽略', '刷新']):
+            self.play_menu.add_radiobutton(label=lb, variable=self.play_var, value=i)
+        self.Menu.add_cascade(label='出牌(内存)', menu=self.play_menu)
+
         self.rate_menu = Menu(self.Menu, tearoff=0)
         self.rate_var = IntVar(value=self.cfg['r'])
         for i, lb in enumerate(['4帧节能', '16帧够用']):
@@ -217,10 +268,30 @@ class MainWindow(Tk):
         self.Menu.add_command(label='OUROCG', command=self.ourocg)
         self.Menu.add_command(label='百鸽查卡', command=self.ygocdb)
 
+        self.Menu.add_separator()
+
+        self.theme_menu = Menu(self.Menu, tearoff=0)
+        self.theme_var = IntVar(value=self.cfg['t'])
+        for i, lb in enumerate(['默认', '深色']):
+            self.theme_menu.add_radiobutton(label=lb, command=self.set_theme, variable=self.theme_var, value=i)
+        self.Menu.add_cascade(label='主题', menu=self.theme_menu)
+
+        self.scroll_menu = Menu(self.Menu, tearoff=0)
+        self.scroll_var = IntVar(value=self.cfg['s'])
+        for i, lb in enumerate(['隐藏', '显示']):
+            self.scroll_menu.add_radiobutton(label=lb, command=self.set_scroll, variable=self.scroll_var, value=i)
+        self.Menu.add_cascade(label='滚动条', menu=self.scroll_menu)
+
+        self.Menu.add_separator()
+
+        self.Menu.add_command(label='12版 220228')
+
         self.bind("<Button-3>", self.popupmenu)
         self.set_jname()
         self.set_ename()
         self.set_attr()
+        self.set_theme()
+        self.set_scroll()
         self.mainloop()
 
     def popupmenu(self, event):
@@ -237,22 +308,19 @@ class MainWindow(Tk):
             'y': self.winfo_y(),
             'f': self.fontsize,
             'm': self.mode_var.get(),
+            'p': self.play_var.get(),
             'r': self.rate_var.get(),
             'j': self.jname_var.get(),
             'e': self.ename_var.get(),
             'a': self.attr_var.get(),
+            't': self.theme_var.get(),
+            's': self.scroll_var.get(),
         }
         try:
             with open('md_hover.cfg', 'w') as f:
-                print(dumps(self.cfg), file=f)
+                print(dumps(self.cfg, separators=(',', ':')), file=f)
         finally:
             self.destroy()
-
-    def set_dark(self):
-        if self.dark_var.get():
-            self.dark_label.pack(side='top', fill='x', padx=(5, 0))
-        else:
-            self.dark_label.pack_forget()
 
     def set_jname(self):
         if self.jname_var.get():
@@ -272,6 +340,51 @@ class MainWindow(Tk):
         else:
             self.attr_label.pack_forget()
 
+    def set_mode(self):
+        try:
+            self.Button1['text'] = f'右击窗口调整参数，\n拉伸窗口调整大小，\n单击按钮开始运行。\n（锁定窗口可隐藏标题栏）\n\n' \
+                                   f'将采用【{self.mode_t0[self.mode_var.get()]}模式】'
+        except Exception:
+            pass
+
+    def set_scroll(self):
+        if self.scroll_var.get():
+            self.desc_label.pack_forget()
+            self.desc_scroll.pack(side='right', fill=Y)
+            self.desc_label.pack(side='left', expand=1, fill=BOTH)
+        else:
+            self.desc_scroll.pack_forget()
+
+    def set_theme(self):
+        if self.theme_var.get():
+            for i in range(6):
+                self.widgets[i]['background'] = '#1F1F1F'
+                self.widgets[i]['foreground'] = '#DFDFDF'
+            self.widgets[6]['background'] = '#1C1C1C'
+        else:
+            for i in range(6):
+                self.widgets[i]['background'] = self.widgets_bg[i]
+                self.widgets[i]['foreground'] = self.widgets_fg[i]
+            self.widgets[6]['background'] = self.widgets_bg[6]
+
+    def apply_font(self):
+        f0 = ('微软雅黑', self.fontsize)
+        f1 = ('微软雅黑', self.fontsize + 1, 'bold')
+        self.cname_label['font'] = f1
+        self.jname_label['font'] = f1
+        self.ename_label['font'] = f1
+        self.attr_label['font'] = f0
+        self.desc_label['font'] = f0
+
+    def font_size_up(self):
+        self.fontsize += 1
+        self.apply_font()
+
+    def font_size_down(self):
+        if self.fontsize > 6:
+            self.fontsize -= 1
+            self.apply_font()
+
     def get_loop(self, loop):
         self.loop = loop
         asyncio.set_event_loop(self.loop)
@@ -285,35 +398,6 @@ class MainWindow(Tk):
         t.daemon = True
         t.start()
         asyncio.run_coroutine_threadsafe(coroutine1, new_loop)
-
-    def set_mode(self):
-        mode = self.mode_var.get()
-        mode_t = self.mode_t0[mode]
-        try:
-            self.Button1['text'] = f'以{mode_t}模式\n运行插件\n\n右击菜单\n调整模式'
-        except Exception:
-            pass
-
-    def font_size_up(self):
-        self.fontsize += 1
-        f0 = ('微软雅黑', self.fontsize, 'bold')
-        f1 = ('微软雅黑', self.fontsize + 1, 'bold')
-        self.cname_label['font'] = f1
-        self.jname_label['font'] = f1
-        self.ename_label['font'] = f1
-        self.attr_label['font'] = f0
-        self.desc_label['font'] = f0
-
-    def font_size_down(self):
-        if self.fontsize > 6:
-            self.fontsize -= 1
-            f0 = ('微软雅黑', self.fontsize, 'bold')
-            f1 = ('微软雅黑', self.fontsize + 1, 'bold')
-            self.cname_label['font'] = f1
-            self.jname_label['font'] = f1
-            self.ename_label['font'] = f1
-            self.attr_label['font'] = f0
-            self.desc_label['font'] = f0
 
     def ygocdb(self):
         webbrowser.open_new('https://ygocdb.com/card/' + str(self.ygoid))
@@ -330,9 +414,8 @@ class MainWindow(Tk):
         self.wm_attributes('-toolwindow', self.toolwindow)
 
     def get_scan(self):
-        # now_str = str(datetime.now())[2:19].replace(":", "_")
-        flag, full_img = screenshot()
-        if not flag:
+        full_img = screenshot()
+        if not full_img:
             return -1
         imgx, imgy = full_img.size
         if imgx < 1280:
@@ -371,25 +454,79 @@ class MainWindow(Tk):
         return 0
 
     def get_memory(self):
-        base_addr = self.base_addr
         pm = self.pm
-        deck_cid, repl_cid, duel_cid = -1, -1, -1
+        base_addr = self.base_addr
+        deck_cid, revi_cid, duel_cid, play_cid, shop_cid = -1, -1, -1, -1, -1
+
         try:
-            value = pm.read_longlong(base_addr + 0x01CCD278)
+            value = pm.read_longlong(base_addr + 0x01CCE3C0)
             for offset in [0xB8, 0x0, 0xF8]:
                 value = pm.read_longlong(value + offset)
             deck_cid = pm.read_int(pm.read_longlong(value + 0x1D8) + 0x20)
-            repl_cid = pm.read_int(pm.read_longlong(value + 0x140) + 0x20)
+            revi_cid = pm.read_int(pm.read_longlong(value + 0x140) + 0x20)
         except Exception:
             pass
+
         try:
-            value = pm.read_longlong(base_addr + 0x01cb2b90)
+            value = pm.read_longlong(base_addr + 0x01CB3CE0)
             for offset in [0xB8, 0x0]:
                 value = pm.read_longlong(value + offset)
             duel_cid = pm.read_int(value + 0x44)
         except Exception:
             pass
-        return deck_cid, repl_cid, duel_cid
+
+        try:
+            value = pm.read_longlong(base_addr + 0x01CF5A18)
+            for offset in [0xB8, 0x0, 0x10]:
+                value = pm.read_longlong(value + offset)
+            play_cid = pm.read_int(value + 0x1DC)
+        except Exception:
+            pass
+
+        if self.shop_flag_addr:
+            try:
+                shop_flag = pm.read_uchar(self.shop_flag_addr)
+                if shop_flag == 6 or shop_flag == 108:
+                    pos = 0
+                elif shop_flag == 221 or shop_flag == 159 or shop_flag == 211:
+                    pos = 1
+                elif shop_flag == 45:
+                    pos = 2
+                else:
+                    pos = -1
+                if pos >= 0:
+                    try:
+                        _addr = pm.read_longlong(base_addr + 0x01D9ED08)
+                        for _offset in [0x40, 0x20, 0x110, 0x18]:
+                            _addr = pm.read_longlong(_addr + _offset)
+                        _addr += 0x18
+                        shop_count = pm.read_longlong(_addr)
+                        shop_cid = pm.read_int(_addr + self.offsets[pos])
+                        shop_cids = [pm.read_longlong(_addr + 24 * i) for i in range(1, shop_count + 1)]
+                        if self.shop_count == shop_count:
+                            diff = [True if self.shop_cids[i] - shop_cids[i] else False for i in range(shop_count)]
+                            if diff.count(True) == 2:
+                                start = diff.index(True)
+                                if diff[start + 2]:
+                                    off0 = start * 24 + 24
+                                    off1 = off0 + 24
+                                    off2 = off1 + 24
+                                    self.offsets = [off0, off1, off2]
+                        self.shop_cids = shop_cids
+                        self.shop_count = shop_count
+                    except Exception:
+                        pass
+            except Exception:
+                self.shop_flag_addr = None
+        else:
+            try:
+                _addr = pm.read_longlong(base_addr + 0x01BD4508)
+                for _offset in [0xB8, 0x0, 0x20, 0x18, 0x2E0, 0x420]:
+                    _addr = pm.read_longlong(_addr + _offset)
+                self.shop_flag_addr = _addr + 0x21
+            except Exception:
+                pass
+        return deck_cid, revi_cid, duel_cid, play_cid, shop_cid
 
     async def handler(self):
         while True:
@@ -409,21 +546,34 @@ class MainWindow(Tk):
                 if self.pm:
                     try:
                         self.pm.read_longlong(self.base_addr)
-                        deck_cid, repl_cid, duelcid = self.get_memory()
-                        if duelcid != self.duel_cid and 3899 < duelcid < 18000:
+                        deck_cid, revi_cid, duelcid, play_cid, shop_cid = self.get_memory()
+                        if 3899 < duelcid < 18000 and duelcid != self.duel_cid:
                             final_cid = duelcid
                             self.duel_cid = duelcid
-                        elif repl_cid != self.repl_cid and 3899 < deck_cid < 18000:
-                            final_cid = repl_cid
-                            self.repl_cid = repl_cid
-                        elif deck_cid != self.deck_cid and 3899 < deck_cid < 18000:
+                        elif 3899 < revi_cid < 18000 and revi_cid != self.revi_cid:
+                            final_cid = revi_cid
+                            self.revi_cid = revi_cid
+                        elif 3899 < deck_cid < 18000 and deck_cid != self.deck_cid:
                             final_cid = deck_cid
                             self.deck_cid = deck_cid
+                        elif self.play_var.get() and 3899 < play_cid < 18000 and play_cid != self.play_cid:
+                            final_cid = play_cid
+                            self.play_cid = play_cid
+                        elif 3899 < shop_cid < 18000 and shop_cid != self.shop_cid:
+                            final_cid = shop_cid
+                            self.shop_cid = shop_cid
                     except Exception:
                         self.pm, self.base_addr = None, 0
+                        self.deck_addr = None
+                        self.revi_addr = None
+                        self.duel_addr = None
+                        self.play_addr = None
+                        self.shop_flag_addr = None
+                        self.shop_count = None
+                        self.shop_cids = None
+                        self.offsets = [816, 840, 864]
             if final_cid in self.cards_info:
                 hover_info = self.cards_info[final_cid]
-                # print(final_cid, hover_info)
                 self.ygoid = hover_info[0]
                 self.cname_label['text'] = hover_info[1]
                 self.jname_label['text'] = hover_info[2]
